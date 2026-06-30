@@ -1,0 +1,6 @@
+@NeciAI.API_HostAddress = http://localhost:5005
+
+GET {{NeciAI.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

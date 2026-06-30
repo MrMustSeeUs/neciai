@@ -1,29 +1,24 @@
-/*
- * File:    FinancialRecordsController.cs
- * Purpose: Handles all CRUD operations and search for financial records.
- *          Satisfies rubric requirements for:
- *          - Secure add, modify, delete (JWT protected)
- *          - Search with multiple row results
- *          - Validation functionality
- * Author:  Abraham Macias
- * Date:    June 2026
- */
+// ============================================================
+// FinancialRecordsController.cs
+// Handles CRUD operations, search, category filtering,
+// and date range filtering for financial records.
+//
+// Author: Abraham Macias
+// Route:  /api/FinancialRecords
+// ============================================================
 
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using NeciAI.API.DTOs;
 using NeciAI.API.Interfaces;
 using NeciAI.API.Models;
-using System;
 using System.Security.Claims;
-using System.Threading.Tasks;
 
 namespace NeciAI.API.Controllers
 {
     /// <summary>
-    /// Manages financial record CRUD operations and search.
-    /// All endpoints require a valid JWT token (Authorize attribute).
-    /// Routes are prefixed with /api/financialrecords
+    /// Provides full CRUD access to the authenticated user's financial records.
+    /// All endpoints require a valid JWT Bearer token.
     /// </summary>
     [ApiController]
     [Route("api/[controller]")]
@@ -38,204 +33,139 @@ namespace NeciAI.API.Controllers
         }
 
         /// <summary>
-        /// GET /api/financialrecords
-        /// Returns all financial records for the authenticated user.
+        /// Returns all financial records belonging to the authenticated user,
+        /// ordered by record date descending.
         /// </summary>
         [HttpGet]
         public async Task<IActionResult> GetAll()
         {
-            var userId = GetUserId();
-            var records = await _financialService.GetAllByUserAsync(userId);
-            return Ok(records.Select(MapToResponse));
+            var records = await _financialService.GetAllByUserAsync(GetUserId());
+            return Ok(records);
         }
 
         /// <summary>
-        /// GET /api/financialrecords/{id}
         /// Returns a single financial record by ID.
-        /// Returns 404 if not found or unauthorized.
+        /// Returns 404 if the record does not exist or belongs to another user.
         /// </summary>
-        [HttpGet("{id}")]
+        [HttpGet("{id:int}")]
         public async Task<IActionResult> GetById(int id)
         {
-            var userId = GetUserId();
-            var record = await _financialService.GetByIdAsync(id, userId);
-
-            if (record == null)
-                return NotFound(new { message = "Record not found." });
-
-            return Ok(MapToResponse(record));
+            var record = await _financialService.GetByIdAsync(id, GetUserId());
+            return record is null
+                ? NotFound(new { message = "Record not found." })
+                : Ok(record);
         }
 
         /// <summary>
-        /// GET /api/financialrecords/search?keyword={term}
-        /// Searches records by keyword across title, description,
-        /// category, and tags. Returns multiple matching rows.
-        /// Satisfies the rubric search requirement.
+        /// Creates a new financial record for the authenticated user.
+        /// The record is associated with the user's ID from the JWT claim.
+        /// </summary>
+        [HttpPost]
+        public async Task<IActionResult> Create([FromBody] FinancialRecordDto dto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var record = MapDtoToRecord(dto, GetUserId());
+            var created = await _financialService.CreateAsync(record);
+
+            return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);
+        }
+
+        /// <summary>
+        /// Updates an existing financial record.
+        /// Returns 404 if the record does not exist or belongs to another user.
+        /// </summary>
+        [HttpPut("{id:int}")]
+        public async Task<IActionResult> Update(int id, [FromBody] FinancialRecordDto dto)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var record  = MapDtoToRecord(dto, GetUserId());
+            var updated = await _financialService.UpdateAsync(id, record, GetUserId());
+
+            return updated is null
+                ? NotFound(new { message = "Record not found." })
+                : Ok(updated);
+        }
+
+        /// <summary>
+        /// Soft-deletes a financial record by setting IsDeleted = true.
+        /// Records are never permanently removed to maintain audit trails.
+        /// </summary>
+        [HttpDelete("{id:int}")]
+        public async Task<IActionResult> Delete(int id)
+        {
+            var success = await _financialService.DeleteAsync(id, GetUserId());
+            return success
+                ? Ok(new { message = "Record deleted successfully." })
+                : NotFound(new { message = "Record not found." });
+        }
+
+        /// <summary>
+        /// Searches financial records by keyword across title, description,
+        /// category, and tags. Returns multiple rows for all matching records.
         /// </summary>
         [HttpGet("search")]
         public async Task<IActionResult> Search([FromQuery] string keyword)
         {
-            if (string.IsNullOrWhiteSpace(keyword) || keyword.Length < 2)
-                return BadRequest(new
-                {
-                    message = "Search keyword must be at least 2 characters."
-                });
+            if (string.IsNullOrWhiteSpace(keyword) || keyword.Trim().Length < 2)
+                return BadRequest(new { message = "Search keyword must be at least 2 characters." });
 
-            var userId = GetUserId();
-            var results = await _financialService.SearchAsync(keyword, userId);
-            var list = results.ToList();
-
-            return Ok(new
-            {
-                keyword,
-                totalResults = list.Count,
-                results = list.Select(MapToResponse)
-            });
+            var results = await _financialService.SearchAsync(keyword, GetUserId());
+            return Ok(new { keyword, results });
         }
 
         /// <summary>
-        /// GET /api/financialrecords/category/{category}
-        /// Returns all records filtered by category.
+        /// Returns all records for the authenticated user in the specified category.
         /// </summary>
         [HttpGet("category/{category}")]
         public async Task<IActionResult> GetByCategory(string category)
         {
-            var userId = GetUserId();
-            var records = await _financialService
-                .GetByCategoryAsync(category, userId);
-            return Ok(records.Select(MapToResponse));
+            var records = await _financialService.GetByCategoryAsync(category, GetUserId());
+            return Ok(records);
         }
 
         /// <summary>
-        /// GET /api/financialrecords/daterange?start={date}&end={date}
-        /// Returns records within a date range for reporting.
+        /// Returns all records within the specified date range, ordered by date ascending.
+        /// Used by the report generation service to gather data sets.
         /// </summary>
         [HttpGet("daterange")]
         public async Task<IActionResult> GetByDateRange(
-            [FromQuery] DateTime start, [FromQuery] DateTime end)
+            [FromQuery] DateTime startDate,
+            [FromQuery] DateTime endDate)
         {
-            if (start > end)
-                return BadRequest(new
-                {
-                    message = "Start date must be before end date."
-                });
+            if (startDate > endDate)
+                return BadRequest(new { message = "Start date must be before end date." });
 
-            var userId = GetUserId();
-            var records = await _financialService
-                .GetByDateRangeAsync(start, end, userId);
-            return Ok(records.Select(MapToResponse));
+            var records = await _financialService.GetByDateRangeAsync(startDate, endDate, GetUserId());
+            return Ok(records);
         }
 
-        /// <summary>
-        /// POST /api/financialrecords
-        /// Creates a new financial record.
-        /// Validates input via DTO data annotations before processing.
-        /// </summary>
-        [HttpPost]
-        public async Task<IActionResult> Create(
-            [FromBody] FinancialRecordDto dto)
-        {
-            if (!ModelState.IsValid)
-                return BadRequest(ModelState);
-
-            var userId = GetUserId();
-
-            var record = new FinancialRecord
-            {
-                Title = dto.Title,
-                Description = dto.Description,
-                Category = dto.Category,
-                Amount = dto.Amount,
-                RecordDate = dto.RecordDate,
-                Tags = dto.Tags,
-                UserId = userId
-            };
-
-            var created = await _financialService.CreateAsync(record);
-            return CreatedAtAction(
-                nameof(GetById),
-                new { id = created.Id },
-                MapToResponse(created));
-        }
+        // ── PRIVATE HELPERS ──────────────────────────────────
 
         /// <summary>
-        /// PUT /api/financialrecords/{id}
-        /// Updates an existing financial record.
-        /// Returns 404 if not found or unauthorized.
-        /// </summary>
-        [HttpPut("{id}")]
-        public async Task<IActionResult> Update(
-            int id, [FromBody] FinancialRecordDto dto)
-        {
-            if (!ModelState.IsValid)
-                return BadRequest(ModelState);
-
-            var userId = GetUserId();
-
-            var updated = new FinancialRecord
-            {
-                Title = dto.Title,
-                Description = dto.Description,
-                Category = dto.Category,
-                Amount = dto.Amount,
-                RecordDate = dto.RecordDate,
-                Tags = dto.Tags
-            };
-
-            var result = await _financialService
-                .UpdateAsync(id, updated, userId);
-
-            if (result == null)
-                return NotFound(new { message = "Record not found." });
-
-            return Ok(MapToResponse(result));
-        }
-
-        /// <summary>
-        /// DELETE /api/financialrecords/{id}
-        /// Soft deletes a financial record.
-        /// Returns 404 if not found or unauthorized.
-        /// </summary>
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> Delete(int id)
-        {
-            var userId = GetUserId();
-            var success = await _financialService.DeleteAsync(id, userId);
-
-            if (!success)
-                return NotFound(new { message = "Record not found." });
-
-            return Ok(new { message = "Record deleted successfully." });
-        }
-
-        /// <summary>
-        /// Extracts the authenticated user's ID from the JWT token claims.
-        /// Private helper — encapsulated within the controller.
+        /// Extracts the authenticated user's ID from the JWT claims.
         /// </summary>
         private string GetUserId() =>
             User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? throw new UnauthorizedAccessException("User not authenticated.");
+                ?? throw new UnauthorizedAccessException("User identity claim not found.");
 
         /// <summary>
-        /// Maps a FinancialRecord model to a response DTO.
-        /// Calls GetSummary() which demonstrates POLYMORPHISM —
-        /// each entity type returns its own summary format.
+        /// Maps a FinancialRecordDto to a FinancialRecord model,
+        /// associating it with the authenticated user's ID.
         /// </summary>
-        private static FinancialRecordResponseDto MapToResponse(
-            FinancialRecord record) => new()
+        private static FinancialRecord MapDtoToRecord(FinancialRecordDto dto, string userId) =>
+            new()
             {
-                Id = record.Id,
-                Title = record.Title,
-                Description = record.Description,
-                Category = record.Category,
-                Amount = record.Amount,
-                RecordDate = record.RecordDate,
-                Tags = record.Tags,
-                IsAnomaly = record.IsAnomaly,
-                AnomalyScore = record.AnomalyScore,
-                CreatedAt = record.CreatedAt,
-                UpdatedAt = record.UpdatedAt,
-                Summary = record.GetSummary() // POLYMORPHISM in action
+                Title       = dto.Title,
+                Description = dto.Description ?? string.Empty,
+                Category    = dto.Category,
+                Amount      = dto.Amount,
+                RecordDate  = dto.RecordDate,
+                Tags        = dto.Tags ?? string.Empty,
+                UserId      = userId,
             };
     }
 }

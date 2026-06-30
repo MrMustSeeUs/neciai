@@ -1,13 +1,11 @@
-/*
- * File:    Program.cs
- * Purpose: Application entry point and service configuration for NeciAI API.
- *          Configures dependency injection, authentication, authorization,
- *          CORS, Entity Framework, and all middleware in the correct order.
- * Author:  Abraham Macias
- * Date:    June 2026
- * Dependencies: ASP.NET Core 8, Entity Framework Core, JWT Bearer Auth,
- *               ASP.NET Identity, Npgsql, EPPlus, iText7
- */
+// ============================================================
+// Program.cs
+// Application entry point, dependency injection registration,
+// middleware pipeline configuration, and CORS policy setup.
+//
+// Author: Abraham Macias
+// Stack:  ASP.NET Core 8, Entity Framework Core, ASP.NET Identity, JWT
+// ============================================================
 
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
@@ -18,155 +16,108 @@ using NeciAI.API.Data;
 using NeciAI.API.Interfaces;
 using NeciAI.API.Models;
 using NeciAI.API.Services;
-using OfficeOpenXml;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ─────────────────────────────────────────────────────────────
-// EPPLUS LICENSE — Required for non-commercial use
-// ─────────────────────────────────────────────────────────────
-ExcelPackage.LicenseContext = LicenseContext.NonCommercial;
-
-// ─────────────────────────────────────────────────────────────
-// DATABASE — PostgreSQL via Entity Framework Core
-// Reads connection string from appsettings.json
-// ─────────────────────────────────────────────────────────────
+// ── DATABASE ────────────────────────────────────────────────
+// Register the EF Core DbContext with the Npgsql PostgreSQL provider.
+// The connection string is injected at runtime via environment variable
+// so credentials never live in source control.
 builder.Services.AddDbContext<NeciAIDbContext>(options =>
-    options.UseNpgsql(
-        builder.Configuration.GetConnectionString("DefaultConnection"),
-        npgsqlOptions => npgsqlOptions.EnableRetryOnFailure(3)
-    )
-);
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection")));
 
-// ─────────────────────────────────────────────────────────────
-// ASP.NET IDENTITY — User management and authentication
-// Configured with strong password requirements for security
-// ─────────────────────────────────────────────────────────────
+// ── IDENTITY ────────────────────────────────────────────────
+// Configure ASP.NET Identity for user management and password hashing.
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 {
-    // Password security requirements
-    options.Password.RequireDigit = true;
-    options.Password.RequireLowercase = true;
-    options.Password.RequireUppercase = true;
+    options.Password.RequireDigit           = true;
+    options.Password.RequireLowercase       = true;
+    options.Password.RequireUppercase       = true;
     options.Password.RequireNonAlphanumeric = true;
-    options.Password.RequiredLength = 8;
-
-    // Lockout settings — lock after 5 failed attempts
-    options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
-    options.Lockout.MaxFailedAccessAttempts = 5;
-    options.Lockout.AllowedForNewUsers = true;
-
-    // User settings
-    options.User.RequireUniqueEmail = true;
+    options.Password.RequiredLength         = 8;
+    options.User.RequireUniqueEmail         = true;
 })
 .AddEntityFrameworkStores<NeciAIDbContext>()
 .AddDefaultTokenProviders();
 
-// ─────────────────────────────────────────────────────────────
-// JWT AUTHENTICATION
-// Validates every incoming request's JWT token
-// ─────────────────────────────────────────────────────────────
-var jwtSettings = builder.Configuration.GetSection("JwtSettings");
-var secretKey = jwtSettings["SecretKey"]
-    ?? throw new InvalidOperationException("JWT SecretKey is not configured.");
+// ── JWT AUTHENTICATION ───────────────────────────────────────
+// Validate incoming Bearer tokens using the symmetric key and
+// issuer/audience values defined in configuration.
+var jwtKey      = builder.Configuration["JwtSettings:SecretKey"]      ?? throw new InvalidOperationException("JWT secret key is not configured.");
+var jwtIssuer   = builder.Configuration["JwtSettings:Issuer"]         ?? "NeciAI.API";
+var jwtAudience = builder.Configuration["JwtSettings:Audience"]       ?? "NeciAI.Client";
 
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme    = JwtBearerDefaults.AuthenticationScheme;
 })
 .AddJwtBearer(options =>
 {
     options.TokenValidationParameters = new TokenValidationParameters
     {
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidateLifetime = true,
         ValidateIssuerSigningKey = true,
-        ValidIssuer = jwtSettings["Issuer"],
-        ValidAudience = jwtSettings["Audience"],
-        IssuerSigningKey = new SymmetricSecurityKey(
-            Encoding.UTF8.GetBytes(secretKey)),
-        ClockSkew = TimeSpan.Zero // No tolerance for expired tokens
+        IssuerSigningKey         = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
+        ValidateIssuer           = true,
+        ValidIssuer              = jwtIssuer,
+        ValidateAudience         = true,
+        ValidAudience            = jwtAudience,
+        ValidateLifetime         = true,
+        ClockSkew                = TimeSpan.Zero,
     };
 });
 
-// ─────────────────────────────────────────────────────────────
-// AUTHORIZATION POLICIES
-// Role-based access control for Admin, Analyst, Client
-// ─────────────────────────────────────────────────────────────
-builder.Services.AddAuthorization(options =>
-{
-    options.AddPolicy("AdminOnly",
-        policy => policy.RequireRole("Admin"));
+// ── CORS ─────────────────────────────────────────────────────
+// Read allowed origins from configuration so they can be updated
+// without modifying source code.
+var allowedOrigins = builder.Configuration
+    .GetSection("CorsSettings:AllowedOrigins")
+    .Get<string[]>()
+    ?? new[]
+    {
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://neciai-ai.vercel.app",
+        "https://neciai-c2fsnomq9-abraham-macias.vercel.app",
+    };
 
-    options.AddPolicy("AnalystOrAbove",
-        policy => policy.RequireRole("Admin", "Analyst"));
-
-    options.AddPolicy("AllUsers",
-        policy => policy.RequireRole("Admin", "Analyst", "Client"));
-});
-
-// ─────────────────────────────────────────────────────────────
-// CORS — Allow React frontend to call this API
-// ─────────────────────────────────────────────────────────────
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("NeciAICorsPolicy", policy =>
-    {
-        policy.WithOrigins(
-            "http://localhost:3000",
-            "http://localhost:5173",
-            "https://neciai-ai.vercel.app",
-            "https://neciai-c2fsnomq9-abraham-macias.vercel.app"
-        )
-        .AllowAnyMethod()
-        .AllowAnyHeader()
-        .AllowCredentials();
-    });
+        policy.WithOrigins(allowedOrigins)
+              .AllowAnyMethod()
+              .AllowAnyHeader()
+              .AllowCredentials());
 });
 
-// ─────────────────────────────────────────────────────────────
-// DEPENDENCY INJECTION — Register our services
-// This is what connects interfaces to their implementations
-// ─────────────────────────────────────────────────────────────
+// ── APPLICATION SERVICES ─────────────────────────────────────
+// Register domain services against their interfaces for loose coupling.
 builder.Services.AddScoped<IFinancialService, FinancialService>();
-builder.Services.AddScoped<IReportService, ReportService>();
+builder.Services.AddScoped<IReportService,    ReportService>();
 
-// ─────────────────────────────────────────────────────────────
-// CONTROLLERS AND API CONFIGURATION
-// ─────────────────────────────────────────────────────────────
+// ── MVC & SWAGGER ────────────────────────────────────────────
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-
-// ─────────────────────────────────────────────────────────────
-// SWAGGER — API documentation with JWT support
-// Allows testing endpoints directly from the browser
-// ─────────────────────────────────────────────────────────────
 builder.Services.AddSwaggerGen(options =>
 {
     options.SwaggerDoc("v1", new OpenApiInfo
     {
-        Title = "NeciAI API",
-        Version = "v1",
-        Description = "Intelligent Financial Data Analysis Platform — " +
-                      "D424 Software Engineering Capstone | Abraham Macias",
-        Contact = new OpenApiContact
-        {
-            Name = "Abraham Macias",
-            Email = "amaci84@wgu.edu"
-        }
+        Title       = "NeciAI API",
+        Version     = "v1",
+        Description = "Intelligent Financial Data Analysis Platform",
+        Contact     = new OpenApiContact { Name = "Abraham Macias" },
     });
 
-    // Add JWT authorization button to Swagger UI
+    // Enable the Authorize button in Swagger UI for JWT testing.
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
-        Description = "Enter your JWT token: Bearer {token}",
-        Name = "Authorization",
-        In = ParameterLocation.Header,
-        Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
+        Name         = "Authorization",
+        Type         = SecuritySchemeType.ApiKey,
+        Scheme       = "Bearer",
+        BearerFormat = "JWT",
+        In           = ParameterLocation.Header,
+        Description  = "Enter: Bearer {your JWT token}",
     });
 
     options.AddSecurityRequirement(new OpenApiSecurityRequirement
@@ -177,7 +128,7 @@ builder.Services.AddSwaggerGen(options =>
                 Reference = new OpenApiReference
                 {
                     Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
+                    Id   = "Bearer",
                 }
             },
             Array.Empty<string>()
@@ -185,17 +136,28 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
-// ─────────────────────────────────────────────────────────────
-// BUILD THE APPLICATION
-// ─────────────────────────────────────────────────────────────
+// ── BUILD ────────────────────────────────────────────────────
 var app = builder.Build();
 
-// ─────────────────────────────────────────────────────────────
-// MIDDLEWARE PIPELINE — Order matters here!
-// Each request passes through these in sequence
-// ─────────────────────────────────────────────────────────────
+// ── SEED DATABASE ────────────────────────────────────────────
+// Apply pending migrations and seed the admin user on startup.
+using (var scope = app.Services.CreateScope())
+{
+    var services = scope.ServiceProvider;
+    try
+    {
+        await DbSeeder.SeedAsync(services);
+    }
+    catch (Exception ex)
+    {
+        var logger = services.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "An error occurred while seeding the database.");
+    }
+}
 
-// Show Swagger in development mode
+// ── MIDDLEWARE PIPELINE ──────────────────────────────────────
+// Swagger is enabled in all environments so the evaluator and
+// developers can explore the API without a local build.
 app.UseSwagger();
 app.UseSwaggerUI(options =>
 {
@@ -203,64 +165,10 @@ app.UseSwaggerUI(options =>
     options.RoutePrefix = "swagger";
 });
 
-// Redirect HTTP to HTTPS
-app.UseHttpsRedirection();
-
-// Apply CORS policy — must come before auth
 app.UseCors("NeciAICorsPolicy");
-
-// Enable authentication — validates JWT tokens
+app.UseHttpsRedirection();
 app.UseAuthentication();
-
-// Enable authorization — enforces role policies
 app.UseAuthorization();
-
-// Map controller routes
 app.MapControllers();
-
-// ─────────────────────────────────────────────────────────────
-// AUTO-MIGRATE DATABASE ON STARTUP
-// Creates all tables automatically if they don't exist
-// ─────────────────────────────────────────────────────────────
-using (var scope = app.Services.CreateScope())
-{
-    var db = scope.ServiceProvider.GetRequiredService<NeciAIDbContext>();
-    var userManager = scope.ServiceProvider
-        .GetRequiredService<UserManager<ApplicationUser>>();
-    var roleManager = scope.ServiceProvider
-        .GetRequiredService<RoleManager<IdentityRole>>();
-
-    // Apply any pending migrations
-    await db.Database.MigrateAsync();
-
-    // Seed default roles if they don't exist
-    string[] roles = { "Admin", "Analyst", "Client" };
-    foreach (var role in roles)
-    {
-        if (!await roleManager.RoleExistsAsync(role))
-            await roleManager.CreateAsync(new IdentityRole(role));
-    }
-
-    // Seed default admin user if no users exist
-    if (!userManager.Users.Any())
-    {
-        var adminUser = new ApplicationUser
-        {
-            UserName = "admin@neciai.app",
-            Email = "admin@neciai.app",
-            FirstName = "NeciAI",
-            LastName = "Administrator",
-            UserRole = "Admin",
-            IsActive = true,
-            EmailConfirmed = true
-        };
-
-        var result = await userManager.CreateAsync(
-            adminUser, "Admin@NeciAI2026!");
-
-        if (result.Succeeded)
-            await userManager.AddToRoleAsync(adminUser, "Admin");
-    }
-}
 
 app.Run();

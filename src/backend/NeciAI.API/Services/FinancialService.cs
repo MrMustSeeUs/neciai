@@ -1,53 +1,37 @@
-/*
- * File:    FinancialService.cs
- * Purpose: Implements IFinancialService interface providing all
- *          business logic for financial record CRUD operations,
- *          search functionality, and category/date filtering.
- *          Demonstrates POLYMORPHISM by implementing the interface
- *          contract defined in IFinancialService.
- * Author:  Abraham Macias
- * Date:    June 2026
- * Dependencies: Entity Framework Core, NeciAIDbContext
- */
+// ============================================================
+// FinancialService.cs
+// Business logic layer for financial record operations.
+// Implements IFinancialService using EF Core and PostgreSQL.
+//
+// All queries automatically exclude soft-deleted records via
+// the global query filter configured in NeciAIDbContext.
+//
+// Author: Abraham Macias
+// ============================================================
 
 using Microsoft.EntityFrameworkCore;
 using NeciAI.API.Data;
 using NeciAI.API.Interfaces;
 using NeciAI.API.Models;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 
 namespace NeciAI.API.Services
 {
     /// <summary>
     /// Concrete implementation of IFinancialService.
-    /// Handles all database operations for financial records
-    /// using Entity Framework Core and PostgreSQL.
-    /// All queries automatically exclude soft-deleted records
-    /// via the global query filter defined in NeciAIDbContext.
+    /// Demonstrates POLYMORPHISM by implementing the interface contract.
     /// </summary>
     public class FinancialService : IFinancialService
     {
-        // Private field — ENCAPSULATION of the database context
+        // Encapsulated dependency — never exposed directly to callers.
         private readonly NeciAIDbContext _context;
 
-        /// <summary>
-        /// Constructor receives the database context via
-        /// dependency injection — not created manually.
-        /// </summary>
         public FinancialService(NeciAIDbContext context)
         {
             _context = context;
         }
 
-        /// <summary>
-        /// Retrieves all financial records belonging to a specific user.
-        /// Results are ordered by record date descending (newest first).
-        /// </summary>
-        public async Task<IEnumerable<FinancialRecord>> GetAllByUserAsync(
-            string userId)
+        /// <inheritdoc/>
+        public async Task<IEnumerable<FinancialRecord>> GetAllByUserAsync(string userId)
         {
             return await _context.FinancialRecords
                 .Where(r => r.UserId == userId)
@@ -55,43 +39,35 @@ namespace NeciAI.API.Services
                 .ToListAsync();
         }
 
-        /// <summary>
-        /// Retrieves a single financial record by ID.
-        /// Returns null if not found or doesn't belong to user.
-        /// </summary>
+        /// <inheritdoc/>
         public async Task<FinancialRecord?> GetByIdAsync(int id, string userId)
         {
             return await _context.FinancialRecords
                 .FirstOrDefaultAsync(r => r.Id == id && r.UserId == userId);
         }
 
-        /// <summary>
-        /// Searches financial records by keyword across multiple fields.
-        /// Satisfies the rubric requirement for search with multiple row
-        /// results — searches Title, Description, Category, and Tags.
-        /// Returns all matching records ordered by relevance (date).
-        /// </summary>
-        public async Task<IEnumerable<FinancialRecord>> SearchAsync(
-            string keyword, string userId)
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Searches Title, Description, Category, and Tags simultaneously
+        /// using case-insensitive comparison. Returns multiple rows when
+        /// more than one record matches the keyword.
+        /// </remarks>
+        public async Task<IEnumerable<FinancialRecord>> SearchAsync(string keyword, string userId)
         {
-            // Normalize keyword for case-insensitive search
             var term = keyword.ToLower().Trim();
 
             return await _context.FinancialRecords
-                .Where(r => r.UserId == userId &&
-                    (r.Title.ToLower().Contains(term) ||
-                     r.Description.ToLower().Contains(term) ||
-                     r.Category.ToLower().Contains(term) ||
-                     r.Tags.ToLower().Contains(term)))
+                .Where(r => r.UserId == userId && MatchesKeyword(r, term))
                 .OrderByDescending(r => r.RecordDate)
                 .ToListAsync();
         }
 
-        /// <summary>
-        /// Creates a new financial record in the database.
-        /// Calls OnBeforeSave() which demonstrates POLYMORPHISM —
-        /// FinancialRecord's override normalizes the data before saving.
-        /// </summary>
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Calls OnBeforeSave() before persistence, demonstrating
+        /// POLYMORPHISM — the FinancialRecord override trims whitespace
+        /// and enforces business rules prior to the database write.
+        /// </remarks>
         public async Task<FinancialRecord> CreateAsync(FinancialRecord record)
         {
             _context.FinancialRecords.Add(record);
@@ -99,82 +75,82 @@ namespace NeciAI.API.Services
             return record;
         }
 
-        /// <summary>
-        /// Updates an existing financial record.
-        /// Returns null if the record doesn't exist or belongs
-        /// to a different user — prevents unauthorized modifications.
-        /// </summary>
-        public async Task<FinancialRecord?> UpdateAsync(
-            int id, FinancialRecord updated, string userId)
+        /// <inheritdoc/>
+        public async Task<FinancialRecord?> UpdateAsync(int id, FinancialRecord updated, string userId)
         {
             var existing = await _context.FinancialRecords
                 .FirstOrDefaultAsync(r => r.Id == id && r.UserId == userId);
 
-            if (existing == null) return null;
+            if (existing is null) return null;
 
-            existing.Title = updated.Title;
+            existing.Title       = updated.Title;
             existing.Description = updated.Description;
-            existing.Category = updated.Category;
-            existing.Amount = updated.Amount;
-            existing.RecordDate = updated.RecordDate;
-            existing.Tags = updated.Tags;
+            existing.Category    = updated.Category;
+            existing.Amount      = updated.Amount;
+            existing.RecordDate  = updated.RecordDate;
+            existing.Tags        = updated.Tags;
 
             await _context.SaveChangesAsync();
             return existing;
         }
 
-        /// <summary>
-        /// Soft deletes a financial record by setting IsDeleted = true.
-        /// The record remains in the database for audit purposes but
-        /// is excluded from all future queries via the global filter.
-        /// Returns false if record not found or unauthorized.
-        /// </summary>
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Performs a soft delete by setting IsDeleted = true.
+        /// Financial records are never permanently removed to support
+        /// audit trails and compliance requirements.
+        /// </remarks>
         public async Task<bool> DeleteAsync(int id, string userId)
         {
             var record = await _context.FinancialRecords
                 .FirstOrDefaultAsync(r => r.Id == id && r.UserId == userId);
 
-            if (record == null) return false;
+            if (record is null) return false;
 
             record.IsDeleted = true;
             await _context.SaveChangesAsync();
             return true;
         }
 
-        /// <summary>
-        /// Retrieves all records for a user filtered by category.
-        /// Supports the dashboard's category breakdown view.
-        /// </summary>
-        public async Task<IEnumerable<FinancialRecord>> GetByCategoryAsync(
-            string category, string userId)
+        /// <inheritdoc/>
+        public async Task<IEnumerable<FinancialRecord>> GetByCategoryAsync(string category, string userId)
         {
             return await _context.FinancialRecords
                 .Where(r => r.UserId == userId &&
-                    r.Category.ToLower() == category.ToLower())
+                            r.Category.ToLower() == category.ToLower())
                 .OrderByDescending(r => r.RecordDate)
                 .ToListAsync();
         }
 
-        /// <summary>
-        /// Retrieves records within a specific date range.
-        /// Converts DateTime to UTC to satisfy PostgreSQL
-        /// timestamp with time zone requirement.
-        /// Used by the report generation service to gather
-        /// the data set for PDF and Excel reports.
-        /// </summary>
+        /// <inheritdoc/>
+        /// <remarks>
+        /// DateTime values are explicitly specified as UTC to satisfy
+        /// Npgsql's requirement for timestamp with time zone columns.
+        /// </remarks>
         public async Task<IEnumerable<FinancialRecord>> GetByDateRangeAsync(
             DateTime startDate, DateTime endDate, string userId)
         {
-            // Specify UTC kind to satisfy PostgreSQL timestamp with time zone
             var startUtc = DateTime.SpecifyKind(startDate, DateTimeKind.Utc);
-            var endUtc = DateTime.SpecifyKind(endDate, DateTimeKind.Utc);
+            var endUtc   = DateTime.SpecifyKind(endDate,   DateTimeKind.Utc);
 
             return await _context.FinancialRecords
                 .Where(r => r.UserId == userId &&
-                    r.RecordDate >= startUtc &&
-                    r.RecordDate <= endUtc)
+                            r.RecordDate >= startUtc &&
+                            r.RecordDate <= endUtc)
                 .OrderBy(r => r.RecordDate)
                 .ToListAsync();
         }
+
+        // ── PRIVATE HELPERS ──────────────────────────────────
+
+        /// <summary>
+        /// Returns true if the record contains the search term in any
+        /// searchable field. Extracted to keep the query readable.
+        /// </summary>
+        private static bool MatchesKeyword(FinancialRecord r, string term) =>
+            r.Title.ToLower().Contains(term)       ||
+            r.Description.ToLower().Contains(term) ||
+            r.Category.ToLower().Contains(term)    ||
+            r.Tags.ToLower().Contains(term);
     }
 }

@@ -28,7 +28,7 @@ const api = axios.create({
 // request. The token is stored on login and cleared on logout.
 api.interceptors.request.use(
   config => {
-    const token = localStorage.getItem('token')
+    const token = localStorage.getItem('neciai_token')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }

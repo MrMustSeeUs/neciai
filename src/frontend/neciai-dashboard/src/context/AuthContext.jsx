@@ -36,7 +36,7 @@ export function AuthProvider({ children }) {
 
     /** Login — calls API, stores token and user in state and localStorage */
     const login = async (email, password) => {
-        const response = await apiLogin({ email, password })
+        const response = await apiLogin(email, password)
         const data = response.data
         setToken(data.token)
         setUser({

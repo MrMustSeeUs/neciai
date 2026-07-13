@@ -14,6 +14,7 @@
  * the same way Program.cs handles the database connection string.
  */
 
+using System.Linq;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using NeciAI.API.Models;
@@ -109,8 +110,19 @@ public static class DbSeeder
             // actually changes anything the first time the app starts
             // after ADMIN_SEED_PASSWORD has been updated in Railway.
             var removeResult = await userManager.RemovePasswordAsync(existingAdmin);
-            if (removeResult.Succeeded)
-                await userManager.AddPasswordAsync(existingAdmin, adminPassword);
+            if (!removeResult.Succeeded)
+            {
+                var errors = string.Join("; ", removeResult.Errors.Select(e => e.Description));
+                logger.LogError("Failed to remove existing admin password: {Errors}", errors);
+                return;
+            }
+
+            var addResult = await userManager.AddPasswordAsync(existingAdmin, adminPassword);
+            if (!addResult.Succeeded)
+            {
+                var errors = string.Join("; ", addResult.Errors.Select(e => e.Description));
+                logger.LogError("Failed to set new admin password: {Errors}", errors);
+            }
         }
     }
 }

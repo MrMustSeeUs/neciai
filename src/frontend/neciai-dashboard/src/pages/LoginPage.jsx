@@ -1,14 +1,33 @@
 /*
- * File:    LoginPage.jsx
- * Purpose: Login page for NeciAI. Fully responsive across all screen sizes.
- * Author:  Abraham Macias
- * Date:    June 2026
+ * File:         LoginPage.jsx
+ * Purpose:      Public login page for NeciAI. Collects email/password,
+ *               calls the AuthContext login() action, and redirects to
+ *               the dashboard on success. Fully responsive across all
+ *               screen sizes via inline flex layout (no CSS framework
+ *               dependency for this page).
+ * Author:       Abraham Macias
+ * Date:         July 2026
+ * Dependencies: react, react-router-dom, ../context/AuthContext
+ *
+ * Security note: this page previously displayed a real, working admin
+ * password directly in the UI as a "demo credentials" convenience for
+ * evaluators. That was removed — see the "Try it yourself" block below —
+ * because publishing a live credential in a public-facing app is a
+ * security liability regardless of how "demo" it's intended to be.
  */
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 
+/**
+ * LoginPage
+ * Renders the sign-in form and owns all of its local form state
+ * (email, password, error message, loading flag). Authentication
+ * itself is delegated entirely to AuthContext — this component
+ * never touches a token or API call directly, which keeps auth
+ * logic in one place if the login flow ever changes.
+ */
 export default function LoginPage() {
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')
@@ -17,6 +36,17 @@ export default function LoginPage() {
     const { login } = useAuth()
     const navigate = useNavigate()
 
+    /**
+     * handleSubmit
+     * Validates that both fields are filled, then delegates to
+     * AuthContext.login(). On success, redirects to the dashboard.
+     * On failure, surfaces the server's error message if present,
+     * falling back to a generic message so the user is never shown
+     * a raw stack trace or undefined error object.
+     * Edge case: the `finally` block guarantees `loading` resets
+     * even if login() throws, preventing the submit button from
+     * getting stuck permanently disabled after a failed attempt.
+     */
     const handleSubmit = async (e) => {
         e.preventDefault()
         setError('')
@@ -44,7 +74,7 @@ export default function LoginPage() {
         }}>
             <div style={{ width: '100%', maxWidth: '420px' }}>
 
-                {/* Logo and Title — OUTSIDE the card, centered above */}
+                {/* Logo and Title — outside the card, centered above */}
                 <div style={{ textAlign: 'center', marginBottom: '32px' }}>
                     <h1 style={{
                         fontSize: '42px',
@@ -81,7 +111,7 @@ export default function LoginPage() {
                         Sign in to your account
                     </h2>
 
-                    {/* Error */}
+                    {/* Error banner — only rendered when an error exists */}
                     {error && (
                         <div style={{
                             background: 'rgba(127,29,29,0.4)',
@@ -98,7 +128,7 @@ export default function LoginPage() {
 
                     <form onSubmit={handleSubmit}>
 
-                        {/* Email */}
+                        {/* Email field */}
                         <div style={{ marginBottom: '16px' }}>
                             <label style={{
                                 display: 'block',
@@ -132,7 +162,7 @@ export default function LoginPage() {
                             />
                         </div>
 
-                        {/* Password */}
+                        {/* Password field */}
                         <div style={{ marginBottom: '20px' }}>
                             <label style={{
                                 display: 'block',
@@ -166,7 +196,9 @@ export default function LoginPage() {
                             />
                         </div>
 
-                        {/* Submit Button */}
+                        {/* Submit button — disabled and re-labeled while a
+                            login request is in flight, to prevent duplicate
+                            submissions from an impatient double-click. */}
                         <button
                             type="submit"
                             disabled={loading}
@@ -190,7 +222,12 @@ export default function LoginPage() {
                         </button>
                     </form>
 
-                    {/* Demo Credentials Box */}
+                    {/* Try-it-yourself note — replaces the old hardcoded
+                        admin demo credentials, which were removed for
+                        security (see file header). Points visitors to the
+                        public Swagger endpoint to register their own
+                        account until a real in-app registration page
+                        exists (tracked as a future enhancement). */}
                     <div style={{
                         marginTop: '20px',
                         background: '#1f2937',
@@ -199,13 +236,19 @@ export default function LoginPage() {
                         border: '1px solid #374151',
                     }}>
                         <p style={{ color: '#9ca3af', fontSize: '12px', fontWeight: '600', margin: '0 0 6px 0', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                            Demo credentials
-                        </p>
-                        <p style={{ color: '#d1d5db', fontSize: '13px', margin: '0 0 3px 0' }}>
-                            Email: <span style={{ color: 'white', fontWeight: '500' }}>admin@neciai.app</span>
+                            Try it yourself
                         </p>
                         <p style={{ color: '#d1d5db', fontSize: '13px', margin: 0 }}>
-                            Password: <span style={{ color: 'white', fontWeight: '500' }}>Admin@NeciAI2026!</span>
+                            Register a free account via the{' '}
+                            <a
+                                href="https://neciai-production.up.railway.app/swagger"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ color: 'white', fontWeight: '500' }}
+                            >
+                                live API docs
+                            </a>{' '}
+                            (POST /api/Auth/register), then log in above.
                         </p>
                     </div>
                 </div>
